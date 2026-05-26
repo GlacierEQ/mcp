@@ -1,6 +1,8 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Fixtures;
+declare(strict_types=1);
+
+namespace Tests\Fixtures;
 
 use Laravel\Mcp\Server\Resource;
 
@@ -11,7 +13,7 @@ class DailyPlanResource extends Resource
         return 'The plan for the day';
     }
 
-    public function read(): string
+    public function handle(): string
     {
         // Dummy markdown content representing the daily plan.
         return "# Daily Plan\n\n- [ ] Task 1\n- [ ] Task 2\n- [ ] Task 3";

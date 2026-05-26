@@ -1,191 +1,222 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Unit\Resources;
-
+use Laravel\Mcp\Response;
+use Laravel\Mcp\Schema\Icon;
 use Laravel\Mcp\Server\Resource;
-use Laravel\Mcp\Server\Resources\Content\Blob;
-use Laravel\Mcp\Server\Resources\Content\Text;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
 
-class ResourceTest extends TestCase
-{
-    #[Test]
-    public function it_returns_a_valid_resource_result_for_text_resources(): void
+it('returns a valid resource result for text resources', function (): void {
+    $resource = new class extends Resource
     {
-        $resource = new class extends Resource
+        public function description(): string
         {
-            public function description(): string
-            {
-                return 'A test text resource.';
-            }
+            return 'A test text resource.';
+        }
 
-            public function read(): string
-            {
-                return 'This is a test resource.';
-            }
-        };
+        public function handle(): Response
+        {
+            return Response::text('This is a test resource.');
+        }
+    };
 
-        $result = $resource->handle();
+    $result = $resource->handle();
 
-        $expected = [
-            'contents' => [
-                [
-                    'uri' => $resource->uri(),
-                    'name' => $resource->name(),
-                    'title' => $resource->title(),
-                    'mimeType' => $resource->mimeType(),
-                    'text' => 'This is a test resource.',
-                ],
-            ],
+    $expected = [
+        'text' => 'This is a test resource.',
+        'uri' => $resource->uri(),
+        'mimeType' => $resource->mimeType(),
+    ];
+
+    expect($result->content()->toResource($resource))->toEqual($expected);
+});
+
+it('returns a valid resource result for binary resources', function (): void {
+    $binaryData = file_get_contents(__DIR__.'/../../Fixtures/binary.png');
+
+    $resource = new class extends Resource
+    {
+        public function description(): string
+        {
+            return 'A test blob resource.';
+        }
+
+        public function uri(): string
+        {
+            return 'file://resources/I_CAN_BE_OVERRIDDEN';
+        }
+
+        public function mimeType(): string
+        {
+            return 'image/png';
+        }
+
+        public function handle(): Response
+        {
+            return Response::blob(file_get_contents(__DIR__.'/../../Fixtures/binary.png'));
+        }
+    };
+
+    $result = $resource->handle();
+
+    $expected = [
+        'blob' => base64_encode($binaryData),
+        'uri' => 'file://resources/I_CAN_BE_OVERRIDDEN',
+        'mimeType' => 'image/png',
+    ];
+
+    expect($result->content()->toResource($resource))->toEqual($expected);
+});
+
+it('handles a text content object returned from read', function (): void {
+    $resource = new class extends Resource
+    {
+        public function description(): string
+        {
+            return 'A test resource.';
+        }
+
+        public function handle(): Response
+        {
+            return Response::text('This is a test resource.');
+        }
+    };
+
+    $result = $resource->handle();
+
+    $expected =
+            [
+                'text' => 'This is a test resource.',
+
+                'uri' => $resource->uri(),
+                'mimeType' => $resource->mimeType(),
+            ];
+
+    expect($result->content()->toResource($resource))->toEqual($expected);
+});
+
+it('handles a blob content object returned from read', function (): void {
+    $resource = new class extends Resource
+    {
+        public function description(): string
+        {
+            return 'A test resource.';
+        }
+
+        public function handle(): Response
+        {
+            return Response::blob('This is a test resource.');
+        }
+    };
+
+    $result = $resource->handle();
+
+    $expected = [
+        'blob' => base64_encode('This is a test resource.'),
+
+        'uri' => $resource->uri(),
+        'mimeType' => $resource->mimeType(),
+    ];
+
+    expect($result->content()->toResource($resource))->toEqual($expected);
+});
+
+test('description property works as expected', function (): void {
+    $resource = new class extends Resource
+    {
+        public function description(): string
+        {
+            return 'A test resource.';
+        }
+
+        public function handle(): string
+        {
+            return 'This is a test resource.';
+        }
+    };
+    expect($resource->description())->toBe('A test resource.');
+});
+
+it('returns no meta by default', function (): void {
+    $resource = new class extends Resource
+    {
+        public function description(): string
+        {
+            return 'Test resource';
+        }
+
+        public function handle(): string
+        {
+            return 'Content';
+        }
+    };
+
+    expect($resource->meta())->toBeNull()
+        ->and($resource->toArray())->not->toHaveKey('_meta');
+});
+
+it('can have custom meta', function (): void {
+    $resource = new class extends Resource
+    {
+        protected ?array $meta = [
+            'author' => 'John Doe',
+            'version' => '1.0',
         ];
 
-        $this->assertSame($expected, $result->toArray());
-    }
-
-    #[Test]
-    public function it_returns_a_valid_resource_result_for_binary_resources(): void
-    {
-        $binaryData = file_get_contents(__DIR__.'/../../Fixtures/binary.png');
-
-        $resource = new class extends Resource
+        public function description(): string
         {
-            public function description(): string
-            {
-                return 'A test blob resource.';
-            }
+            return 'Test resource';
+        }
 
-            public function uri(): string
-            {
-                return 'file://resources/I_CAN_BE_OVERRIDDEN';
-            }
-
-            public function mimeType(): string
-            {
-                return 'image/png';
-            }
-
-            public function read(): string
-            {
-                return file_get_contents(__DIR__.'/../../Fixtures/binary.png');
-            }
-        };
-
-        $result = $resource->handle()->toArray();
-
-        $expected = [
-            'contents' => [
-                [
-                    'uri' => 'file://resources/I_CAN_BE_OVERRIDDEN',
-                    'name' => $resource->name(),
-                    'title' => $resource->title(),
-                    'mimeType' => 'image/png',
-                    'blob' => base64_encode($binaryData),
-                ],
-            ],
-        ];
-
-        $this->assertSame($expected, $result);
-    }
-
-    #[Test]
-    public function it_handles_a_text_content_object_returned_from_read(): void
-    {
-        $resource = new class extends Resource
+        public function handle(): string
         {
-            public function description(): string
-            {
-                return 'A test resource.';
-            }
+            return 'Content';
+        }
+    };
 
-            public function read(): Text
-            {
-                return new Text('This is a test resource.');
-            }
-        };
+    expect($resource->toArray())
+        ->toHaveKey('_meta')
+        ->_meta->toEqual([
+            'author' => 'John Doe',
+            'version' => '1.0',
+        ]);
+});
 
-        $result = $resource->handle()->toArray();
-
-        $expected = [
-            'contents' => [
-                [
-                    'uri' => $resource->uri(),
-                    'name' => $resource->name(),
-                    'title' => $resource->title(),
-                    'mimeType' => $resource->mimeType(),
-                    'text' => 'This is a test resource.',
-                ],
-            ],
-        ];
-
-        $this->assertSame($expected, $result);
-    }
-
-    #[Test]
-    public function it_handles_a_blob_content_object_returned_from_read(): void
+it('includes icons in toArray when declared on a resource', function (): void {
+    $resource = new class extends Resource
     {
-        $resource = new class extends Resource
+        public function description(): string
         {
-            public function description(): string
-            {
-                return 'A test resource.';
-            }
+            return 'Test resource';
+        }
 
-            public function read(): Blob
-            {
-                return new Blob('This is a test resource.');
-            }
-        };
-
-        $result = $resource->handle()->toArray();
-
-        $expected = [
-            'contents' => [
-                [
-                    'uri' => $resource->uri(),
-                    'name' => $resource->name(),
-                    'title' => $resource->title(),
-                    'mimeType' => $resource->mimeType(),
-                    'blob' => base64_encode('This is a test resource.'),
-                ],
-            ],
-        ];
-
-        $this->assertSame($expected, $result);
-    }
-
-    #[Test]
-    public function it_only_calls_read_once(): void
-    {
-        $resource = $this->getMockBuilder(Resource::class)
-            ->onlyMethods(['read', 'description'])
-            ->getMock();
-
-        $resource->method('description')
-            ->willReturn('A test resource.');
-
-        $resource->expects($this->once())
-            ->method('read')
-            ->willReturn('This is a test resource.');
-
-        $result = $resource->handle();
-
-        $this->assertSame('This is a test resource.', $result->toArray()['contents'][0]['text']);
-    }
-
-    #[Test]
-    public function description_property_works_as_expected(): void
-    {
-        $resource = new class extends Resource
+        public function handle(): Response
         {
-            protected string $description = 'A test resource.';
+            return Response::text('content');
+        }
 
-            public function read(): string
-            {
-                return 'This is a test resource.';
-            }
-        };
+        public function icons(): array
+        {
+            return [new Icon('https://example.com/resource.png', mimeType: 'image/png')];
+        }
+    };
 
-        $this->assertSame('A test resource.', $resource->description());
-    }
-}
+    expect($resource->toArray()['icons'])->toBe([
+        ['src' => 'https://example.com/resource.png', 'mimeType' => 'image/png'],
+    ]);
+});
+
+it('omits icons in toArray when none are declared', function (): void {
+    $resource = new class extends Resource
+    {
+        public function description(): string
+        {
+            return 'Test resource';
+        }
+
+        public function handle(): Response
+        {
+            return Response::text('content');
+        }
+    };
+
+    expect($resource->toArray())->not->toHaveKey('icons');
+});

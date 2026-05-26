@@ -1,6 +1,8 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Fixtures;
+declare(strict_types=1);
+
+namespace Tests\Fixtures;
 
 use Laravel\Mcp\Server;
 
@@ -10,9 +12,9 @@ class ServerWithDynamicTools extends Server
         //
     ];
 
-    public function boot($clientCapabilities = [])
+    protected function boot(): void
     {
-        $this->addTool(ExampleTool::class);
-        $this->addTool(StreamingTool::class);
+        $this->tools[] = SayHiTool::class;
+        $this->tools[] = StreamingTool::class;
     }
 }

@@ -1,6 +1,8 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Fixtures;
+declare(strict_types=1);
+
+namespace Tests\Fixtures;
 
 use Laravel\Mcp\Server\Resource;
 
@@ -11,7 +13,7 @@ class RecentMeetingRecordingResource extends Resource
         return 'The most recent meeting recording';
     }
 
-    public function read(): string
+    public function handle(): string
     {
         return "This is a test resource.\0dummy-binary-data";
     }

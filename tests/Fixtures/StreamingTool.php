@@ -1,35 +1,36 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Fixtures;
+declare(strict_types=1);
+
+namespace Tests\Fixtures;
 
 use Generator;
+use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Laravel\Mcp\Request;
+use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Tool;
-use Laravel\Mcp\Server\Tools\ToolInputSchema;
-use Laravel\Mcp\Server\Tools\ToolNotification;
-use Laravel\Mcp\Server\Tools\ToolResult;
 
 class StreamingTool extends Tool
 {
-    public function description(): string
+    protected string $description = 'A tool that streams multiple responses.';
+
+    public function schema(JsonSchema $schema): array
     {
-        return 'A tool that streams multiple responses.';
+        return [
+            'count' => $schema->integer()
+                ->description('Number of messages to stream.')
+                ->required(),
+        ];
     }
 
-    public function schema(ToolInputSchema $schema): ToolInputSchema
+    public function handle(Request $request): Generator
     {
-        return $schema->integer('count')
-            ->description('Number of messages to stream.')
-            ->required();
-    }
-
-    public function handle(array $arguments): Generator
-    {
-        $count = $arguments['count'] ?? 2;
+        $count = $request->integer('count', 2);
 
         for ($i = 1; $i <= $count; $i++) {
-            yield new ToolNotification('stream/progress', ['progress' => $i / $count * 100, 'message' => "Processing item {$i} of {$count}"]);
+            yield Response::notification('stream/progress', ['progress' => $i / $count * 100, 'message' => "Processing item {$i} of {$count}"]);
         }
 
-        yield ToolResult::text("Finished streaming {$count} messages.");
+        yield Response::text("Finished streaming {$count} messages.");
     }
 }

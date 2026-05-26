@@ -1,47 +1,42 @@
 <?php
 
-namespace Tests\Unit\Methods;
-
-use Laravel\Mcp\Server\Exceptions\JsonRpcException;
+use Laravel\Mcp\Enums\IconTheme;
+use Laravel\Mcp\Exceptions\JsonRpcException;
+use Laravel\Mcp\Schema\Icon;
+use Laravel\Mcp\Schema\Implementation;
 use Laravel\Mcp\Server\Methods\Initialize;
 use Laravel\Mcp\Server\ServerContext;
-use Laravel\Mcp\Server\Transport\JsonRpcRequest;
-use Laravel\Mcp\Server\Transport\JsonRpcResponse;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
+use Laravel\Mcp\Transport\JsonRpcRequest;
+use Laravel\Mcp\Transport\JsonRpcResponse;
 
-class InitializeTest extends TestCase
-{
-    #[Test]
-    public function it_returns_a_valid_initialize_response()
-    {
-        $request = JsonRpcRequest::fromJson(json_encode([
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'initialize',
-            'params' => [],
-        ]));
+it('returns a valid initialize response', function (): void {
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'initialize',
+        'params' => [],
+    ]);
 
-        $context = new ServerContext(
-            supportedProtocolVersions: ['2025-03-26'],
-            serverCapabilities: ['listChanged' => false],
-            serverName: 'Test Server',
-            serverVersion: '1.0.0',
-            instructions: 'Test instructions',
-            maxPaginationLength: 50,
-            defaultPaginationLength: 10,
-            tools: [],
-            resources: [],
-            prompts: [],
-        );
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26'],
+        serverCapabilities: ['listChanged' => false],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [],
+    );
 
-        $method = new Initialize;
+    $method = new Initialize;
 
-        $response = $method->handle($request, $context);
+    $response = $method->handle($request, $context);
 
-        $this->assertInstanceOf(JsonRpcResponse::class, $response);
-        $this->assertEquals(1, $response->id);
-        $this->assertEquals([
+    expect($response)->toBeInstanceOf(JsonRpcResponse::class);
+    $payload = $response->toArray();
+    expect($payload['id'])->toEqual(1)
+        ->and($payload['result'])->toEqual([
             'protocolVersion' => '2025-03-26',
             'capabilities' => ['listChanged' => false],
             'serverInfo' => [
@@ -49,83 +44,132 @@ class InitializeTest extends TestCase
                 'version' => '1.0.0',
             ],
             'instructions' => 'Test instructions',
-        ], $response->result);
-    }
+        ]);
+});
 
-    #[Test]
-    public function it_throws_exception_for_unsupported_protocol_version()
-    {
-        $this->expectException(JsonRpcException::class);
-        $this->expectExceptionMessage('Unsupported protocol version');
-        $this->expectExceptionCode(-32602);
+it('throws exception for unsupported protocol version', function (): void {
+    $this->expectException(JsonRpcException::class);
+    $this->expectExceptionMessage('Unsupported protocol version');
+    $this->expectExceptionCode(-32602);
 
-        $request = JsonRpcRequest::fromJson(json_encode([
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'initialize',
+        'params' => [
+            'protocolVersion' => '2024-11-05',
+        ],
+    ]);
+
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26'],
+        serverCapabilities: [],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [],
+    );
+
+    $method = new Initialize;
+
+    try {
+        $method->handle($request, $context);
+    } catch (JsonRpcException $jsonRpcException) {
+        $error = $jsonRpcException->toJsonRpcResponse()->toArray();
+
+        expect($error)->toEqual([
             'jsonrpc' => '2.0',
             'id' => 1,
-            'method' => 'initialize',
-            'params' => [
-                'protocolVersion' => '2024-11-05',
+            'error' => [
+                'code' => -32602,
+                'message' => 'Unsupported protocol version',
+                'data' => [
+                    'supported' => ['2025-03-26'],
+                    'requested' => '2024-11-05',
+                ],
             ],
-        ]));
+        ]);
 
-        $context = new ServerContext(
-            supportedProtocolVersions: ['2025-03-26'],
-            serverCapabilities: [],
-            serverName: 'Test Server',
-            serverVersion: '1.0.0',
-            instructions: 'Test instructions',
-            maxPaginationLength: 50,
-            defaultPaginationLength: 10,
-            tools: [],
-            resources: [],
-            prompts: [],
-        );
-
-        $method = new Initialize;
-
-        try {
-            $method->handle($request, $context);
-        } catch (JsonRpcException $e) {
-            $this->assertEquals(1, $e->getRequestId());
-            $this->assertEquals([
-                'supported' => ['2025-03-26'],
-                'requested' => '2024-11-05',
-            ], $e->getData());
-            throw $e;
-        }
+        throw $jsonRpcException;
     }
+});
 
-    #[Test]
-    public function it_uses_requested_protocol_version_if_supported()
-    {
-        $requestedVersion = '2024-11-05';
-        $request = JsonRpcRequest::fromJson(json_encode([
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'initialize',
-            'params' => [
-                'protocolVersion' => $requestedVersion,
+it('emits the full implementation payload in serverInfo regardless of negotiated protocol version', function (string $version): void {
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'initialize',
+        'params' => ['protocolVersion' => $version],
+    ]);
+
+    $context = new ServerContext(
+        supportedProtocolVersions: [$version],
+        serverCapabilities: ['listChanged' => false],
+        implementation: new Implementation(
+            name: 'Test Server',
+            version: '1.0.0',
+            title: 'Test Title',
+            description: 'A test server',
+            icons: [
+                new Icon('https://example.com/server.png', mimeType: 'image/png', sizes: ['48x48']),
+                new Icon('https://example.com/server-dark.svg', mimeType: 'image/svg+xml', theme: IconTheme::Dark),
             ],
-        ]));
+            websiteUrl: 'https://example.com',
+        ),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [],
+    );
 
-        $context = new ServerContext(
-            supportedProtocolVersions: ['2025-03-26', '2024-11-05'],
-            serverCapabilities: [],
-            serverName: 'Test Server',
-            serverVersion: '1.0.0',
-            instructions: 'Test instructions',
-            maxPaginationLength: 50,
-            defaultPaginationLength: 10,
-            tools: [],
-            resources: [],
-            prompts: [],
-        );
+    $payload = (new Initialize)->handle($request, $context)->toArray();
 
-        $method = new Initialize;
-        $response = $method->handle($request, $context);
+    expect($payload['result']['serverInfo'])->toEqual([
+        'name' => 'Test Server',
+        'version' => '1.0.0',
+        'title' => 'Test Title',
+        'description' => 'A test server',
+        'icons' => [
+            ['src' => 'https://example.com/server.png', 'mimeType' => 'image/png', 'sizes' => ['48x48']],
+            ['src' => 'https://example.com/server-dark.svg', 'mimeType' => 'image/svg+xml', 'theme' => 'dark'],
+        ],
+        'websiteUrl' => 'https://example.com',
+    ])->and($payload['result']['instructions'])->toBe('Test instructions');
+})->with(['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25']);
 
-        $this->assertInstanceOf(JsonRpcResponse::class, $response);
-        $this->assertEquals(1, $response->id);
-        $this->assertEquals($requestedVersion, $response->result['protocolVersion']);
-    }
-}
+it('uses requested protocol version if supported', function (): void {
+    $requestedVersion = '2024-11-05';
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'initialize',
+        'params' => [
+            'protocolVersion' => $requestedVersion,
+        ],
+    ]);
+
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26', '2024-11-05'],
+        serverCapabilities: [],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [],
+    );
+
+    $method = new Initialize;
+    $response = $method->handle($request, $context);
+
+    expect($response)->toBeInstanceOf(JsonRpcResponse::class);
+    $payload = $response->toArray();
+    expect($payload['id'])->toEqual(1)
+        ->and($payload['result']['protocolVersion'])->toEqual($requestedVersion);
+});

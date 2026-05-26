@@ -1,165 +1,246 @@
 <?php
 
-namespace Tests\Unit\Methods;
-
-use Illuminate\Support\ItemNotFoundException;
-use InvalidArgumentException;
+use Laravel\Mcp\Exceptions\JsonRpcException;
+use Laravel\Mcp\Schema\Implementation;
 use Laravel\Mcp\Server\Methods\GetPrompt;
 use Laravel\Mcp\Server\ServerContext;
-use Laravel\Mcp\Server\Transport\JsonRpcRequest;
-use Laravel\Mcp\Server\Transport\JsonRpcResponse;
-use Laravel\Mcp\Tests\Fixtures\ReviewMyCodePrompt;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
+use Laravel\Mcp\Transport\JsonRpcRequest;
+use Laravel\Mcp\Transport\JsonRpcResponse;
+use Tests\Fixtures\PromptWithResultMetaPrompt;
+use Tests\Fixtures\ReviewMyCodePrompt;
+use Tests\Fixtures\TellMeHiPrompt;
 
-class GetPromptTest extends TestCase
-{
-    #[Test]
-    public function it_returns_a_valid_get_prompt_response()
-    {
-        $request = JsonRpcRequest::fromJson(json_encode([
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'prompts/get',
-            'params' => [
-                'name' => 'review-my-code-prompt',
-                'arguments' => [],
+it('returns a valid get prompt response', function (): void {
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'prompts/get',
+        'params' => [
+            'name' => 'review-my-code-prompt',
+            'arguments' => [],
+        ],
+    ]);
+
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26'],
+        serverCapabilities: [],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [ReviewMyCodePrompt::class],
+    );
+
+    $method = new GetPrompt;
+
+    $response = $method->handle($request, $context);
+
+    expect($response)->toBeInstanceOf(JsonRpcResponse::class);
+    $payload = $response->toArray();
+    expect($payload['id'])->toEqual(1);
+    expect($payload['result'])->toEqual([
+        'description' => 'Instructions for how to review my code',
+        'messages' => [
+            [
+                'role' => 'user',
+                'content' => [
+                    'type' => 'text',
+                    'text' => 'Here are the instructions on how to review my code',
+                ],
             ],
-        ]));
+        ],
+    ]);
+});
 
-        $context = new ServerContext(
-            supportedProtocolVersions: ['2025-03-26'],
-            serverCapabilities: [],
-            serverName: 'Test Server',
-            serverVersion: '1.0.0',
-            instructions: 'Test instructions',
-            maxPaginationLength: 50,
-            defaultPaginationLength: 10,
-            tools: [],
-            resources: [],
-            prompts: [ReviewMyCodePrompt::class],
-        );
+it('resolves the handle method from the IOC container', function (): void {
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'prompts/get',
+        'params' => [
+            'name' => 'tell-me-hi-prompt',
+            'arguments' => [],
+        ],
+    ]);
 
-        $method = new GetPrompt;
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26'],
+        serverCapabilities: [],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [TellMeHiPrompt::class],
+    );
 
-        $response = $method->handle($request, $context);
+    $method = new GetPrompt;
 
-        $this->assertInstanceOf(JsonRpcResponse::class, $response);
-        $this->assertEquals(1, $response->id);
-        $this->assertEquals([
-            'description' => 'Instructions for how to review my code',
+    $response = $method->handle($request, $context);
+
+    expect($response)->toBeInstanceOf(JsonRpcResponse::class);
+    $payload = $response->toArray();
+    expect($payload['id'])->toEqual(1);
+    expect($payload['result'])->toEqual([
+        'description' => 'Instructions for how too tell me hi',
+        'messages' => [
+            [
+                'role' => 'user',
+                'content' => [
+                    'type' => 'text',
+                    'text' => 'Here are the instructions on how to tell me hi',
+                ],
+            ],
+        ],
+    ]);
+});
+
+it('throws exception when name parameter is missing', function (): void {
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'prompts/get',
+        'params' => [
+            'arguments' => [],
+        ],
+    ]);
+
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26'],
+        serverCapabilities: [],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [ReviewMyCodePrompt::class],
+    );
+
+    $method = new GetPrompt;
+
+    $this->expectException(JsonRpcException::class);
+    $this->expectExceptionMessage('Missing [name] parameter.');
+
+    $method->handle($request, $context);
+});
+
+it('throws exception when prompt not found', function (): void {
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'prompts/get',
+        'params' => [
+            'name' => 'non-existent-prompt',
+            'arguments' => [],
+        ],
+    ]);
+
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26'],
+        serverCapabilities: [],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [ReviewMyCodePrompt::class],
+    );
+
+    $method = new GetPrompt;
+
+    $this->expectException(JsonRpcException::class);
+    $this->expectExceptionMessage('Prompt [non-existent-prompt] not found.');
+
+    $method->handle($request, $context);
+});
+
+it('passes arguments to prompt handler', function (): void {
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'prompts/get',
+        'params' => [
+            'name' => 'review-my-code-prompt',
+            'arguments' => ['test_arg' => 'test_value'],
+        ],
+    ]);
+
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26'],
+        serverCapabilities: [],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [ReviewMyCodePrompt::class],
+    );
+
+    $method = new GetPrompt;
+
+    $response = $method->handle($request, $context);
+
+    expect($response)->toBeInstanceOf(JsonRpcResponse::class);
+    $payload = $response->toArray();
+    expect($payload['id'])->toEqual(1);
+    expect($payload['result'])->toHaveKey('description');
+    expect($payload['result'])->toHaveKey('messages');
+});
+
+it('returns a prompt result with result-level meta when using ResponseFactory', function (): void {
+    $request = JsonRpcRequest::from([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'prompts/get',
+        'params' => [
+            'name' => 'prompt-with-result-meta-prompt',
+        ],
+    ]);
+
+    $context = new ServerContext(
+        supportedProtocolVersions: ['2025-03-26'],
+        serverCapabilities: [],
+        implementation: new Implementation('Test Server', '1.0.0'),
+        instructions: 'Test instructions',
+        maxPaginationLength: 50,
+        defaultPaginationLength: 10,
+        tools: [],
+        resources: [],
+        prompts: [PromptWithResultMetaPrompt::class],
+    );
+
+    $method = new GetPrompt;
+
+    $response = $method->handle($request, $context);
+
+    $payload = $response->toArray();
+
+    expect($payload)
+        ->toBeArray()
+        ->id->toBe(1)
+        ->result->toMatchArray([
+            '_meta' => [
+                'prompt_version' => '2.0',
+                'last_updated' => '2025-01-01',
+            ],
+            'description' => 'Prompt with result-level meta',
             'messages' => [
                 [
                     'role' => 'user',
                     'content' => [
                         'type' => 'text',
-                        'text' => 'Here are the instructions on how to review my code',
+                        'text' => 'Prompt instructions with result meta',
+                        '_meta' => [
+                            'key' => 'value',
+                        ],
                     ],
                 ],
             ],
-        ], $response->result);
-    }
-
-    #[Test]
-    public function it_throws_exception_when_name_parameter_is_missing()
-    {
-        $request = JsonRpcRequest::fromJson(json_encode([
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'prompts/get',
-            'params' => [
-                'arguments' => [],
-            ],
-        ]));
-
-        $context = new ServerContext(
-            supportedProtocolVersions: ['2025-03-26'],
-            serverCapabilities: [],
-            serverName: 'Test Server',
-            serverVersion: '1.0.0',
-            instructions: 'Test instructions',
-            maxPaginationLength: 50,
-            defaultPaginationLength: 10,
-            tools: [],
-            resources: [],
-            prompts: [ReviewMyCodePrompt::class],
-        );
-
-        $method = new GetPrompt;
-
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Missing required parameter: name');
-
-        $method->handle($request, $context);
-    }
-
-    #[Test]
-    public function it_throws_exception_when_prompt_not_found()
-    {
-        $request = JsonRpcRequest::fromJson(json_encode([
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'prompts/get',
-            'params' => [
-                'name' => 'non-existent-prompt',
-                'arguments' => [],
-            ],
-        ]));
-
-        $context = new ServerContext(
-            supportedProtocolVersions: ['2025-03-26'],
-            serverCapabilities: [],
-            serverName: 'Test Server',
-            serverVersion: '1.0.0',
-            instructions: 'Test instructions',
-            maxPaginationLength: 50,
-            defaultPaginationLength: 10,
-            tools: [],
-            resources: [],
-            prompts: [ReviewMyCodePrompt::class],
-        );
-
-        $method = new GetPrompt;
-
-        $this->expectException(ItemNotFoundException::class);
-        $this->expectExceptionMessage('Prompt not found');
-
-        $method->handle($request, $context);
-    }
-
-    #[Test]
-    public function it_passes_arguments_to_prompt_handler()
-    {
-        $request = JsonRpcRequest::fromJson(json_encode([
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'prompts/get',
-            'params' => [
-                'name' => 'review-my-code-prompt',
-                'arguments' => ['test_arg' => 'test_value'],
-            ],
-        ]));
-
-        $context = new ServerContext(
-            supportedProtocolVersions: ['2025-03-26'],
-            serverCapabilities: [],
-            serverName: 'Test Server',
-            serverVersion: '1.0.0',
-            instructions: 'Test instructions',
-            maxPaginationLength: 50,
-            defaultPaginationLength: 10,
-            tools: [],
-            resources: [],
-            prompts: [ReviewMyCodePrompt::class],
-        );
-
-        $method = new GetPrompt;
-
-        $response = $method->handle($request, $context);
-
-        $this->assertInstanceOf(JsonRpcResponse::class, $response);
-        $this->assertEquals(1, $response->id);
-        $this->assertArrayHasKey('description', $response->result);
-        $this->assertArrayHasKey('messages', $response->result);
-    }
-}
+        ]);
+});

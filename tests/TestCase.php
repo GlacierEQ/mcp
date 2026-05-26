@@ -1,32 +1,27 @@
 <?php
 
-namespace Laravel\Mcp\Tests;
+declare(strict_types=1);
 
+namespace Tests;
+
+use Laravel\Mcp\Schema\Implementation;
 use Laravel\Mcp\Server\Contracts\Resources\Content;
-use Laravel\Mcp\Server\McpServiceProvider;
 use Laravel\Mcp\Server\Resource;
 use Laravel\Mcp\Server\ServerContext;
-use Laravel\Mcp\Server\Transport\JsonRpcResponse;
+use Laravel\Mcp\Transport\JsonRpcResponse;
+use Orchestra\Testbench\Concerns\WithWorkbench;
 use Orchestra\Testbench\TestCase as TestbenchTestCase;
-use Workbench\App\Providers\WorkbenchServiceProvider;
 
 abstract class TestCase extends TestbenchTestCase
 {
-    protected function getPackageProviders($app)
-    {
-        return [
-            McpServiceProvider::class,
-            WorkbenchServiceProvider::class,
-        ];
-    }
+    use WithWorkbench;
 
     protected function getServerContext(array $properties = []): ServerContext
     {
         $properties = array_merge([
             'supportedProtocolVersions' => [],
             'serverCapabilities' => [],
-            'serverName' => 'test-server',
-            'serverVersion' => '1.0.0',
+            'implementation' => new Implementation('test-server', '1.0.0'),
             'instructions' => 'test-instructions',
             'maxPaginationLength' => 3,
             'defaultPaginationLength' => 3,
@@ -79,17 +74,19 @@ abstract class TestCase extends TestbenchTestCase
         return new class($content, $description, $overrides) extends Resource
         {
             public function __construct(
-                private string|Content $contentValue,
+                private string $contentValue,
                 private string $desc,
                 private array $overrides,
-            ) {}
+            ) {
+                //
+            }
 
             public function description(): string
             {
                 return $this->desc;
             }
 
-            public function read(): string|Content
+            public function handle(): string
             {
                 return $this->contentValue;
             }
@@ -112,7 +109,7 @@ abstract class TestCase extends TestbenchTestCase
         array $overrides = [],
     ): Resource {
         $content = file_get_contents($filePath);
-        $overrides['mimeType'] = $overrides['mimeType'] ?? (mime_content_type($filePath) ?: 'application/octet-stream');
+        $overrides['mimeType'] ??= mime_content_type($filePath) ?: 'application/octet-stream';
 
         return $this->makeResource($content, $description, $overrides);
     }

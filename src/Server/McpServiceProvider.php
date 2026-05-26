@@ -6,62 +6,65 @@ namespace Laravel\Mcp\Server;
 
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
-use Laravel\Mcp\Console\Commands\McpInspectorCommand;
-use Laravel\Mcp\Console\Commands\ResourceMakeCommand;
-use Laravel\Mcp\Console\Commands\ServerMakeCommand;
-use Laravel\Mcp\Console\Commands\StartServerCommand;
-use Laravel\Mcp\Console\Commands\ToolMakeCommand;
+use Laravel\Mcp\Console\Commands\InspectorCommand;
+use Laravel\Mcp\Console\Commands\MakeAppResourceCommand;
+use Laravel\Mcp\Console\Commands\MakePromptCommand;
+use Laravel\Mcp\Console\Commands\MakeResourceCommand;
+use Laravel\Mcp\Console\Commands\MakeServerCommand;
+use Laravel\Mcp\Console\Commands\MakeToolCommand;
+use Laravel\Mcp\Console\Commands\StartCommand;
+use Laravel\Mcp\Request;
 
 class McpServiceProvider extends ServiceProvider
 {
-    /**
-     * Register any application services.
-     *
-     * @return void
-     */
-    public function register()
+    public function register(): void
     {
-        $this->app->singleton('mcp', fn () => new Registrar);
+        $this->app->singleton(Registrar::class, fn (): Registrar => new Registrar);
+
+        $this->app->singleton('mcp.sdk', fn (): string => (string) file_get_contents(__DIR__.'/../../resources/js/mcp-sdk.min.js'));
+
+        $this->mergeConfigFrom(__DIR__.'/../../config/mcp.php', 'mcp');
+    }
+
+    public function boot(): void
+    {
+        $this->registerMcpScope();
+        $this->registerRoutes();
+        $this->registerContainerCallbacks();
+        $this->registerViews();
 
         if ($this->app->runningInConsole()) {
-            $this->commands([
-                StartServerCommand::class,
-                ServerMakeCommand::class,
-                ToolMakeCommand::class,
-                ResourceMakeCommand::class,
-                McpInspectorCommand::class,
-            ]);
+            $this->registerCommands();
+            $this->registerPublishing();
         }
     }
 
-    /**
-     * Bootstrap any application services.
-     *
-     * @return void
-     */
-    public function boot()
-    {
-        if ($this->app->runningInConsole()) {
-            $this->offerPublishing();
-        }
-
-        $this->loadAiRoutes();
-    }
-
-    /**
-     * Register the migrations and publishing for the package.
-     */
-    protected function offerPublishing(): void
+    protected function registerPublishing(): void
     {
         $this->publishes([
             __DIR__.'/../../routes/ai.php' => base_path('routes/ai.php'),
         ], 'ai-routes');
+
+        $this->publishes([
+            __DIR__.'/../../resources/views/mcp/authorize.blade.php' => resource_path('views/mcp/authorize.blade.php'),
+            __DIR__.'/../../resources/views/mcp/components/app.blade.php' => resource_path('views/vendor/mcp/components/app.blade.php'),
+        ], 'mcp-views');
+
+        $this->publishes([
+            __DIR__.'/../../stubs/mcp-prompt.stub' => base_path('stubs/mcp-prompt.stub'),
+            __DIR__.'/../../stubs/mcp-resource.stub' => base_path('stubs/mcp-resource.stub'),
+            __DIR__.'/../../stubs/mcp-server.stub' => base_path('stubs/mcp-server.stub'),
+            __DIR__.'/../../stubs/mcp-tool.stub' => base_path('stubs/mcp-tool.stub'),
+            __DIR__.'/../../stubs/mcp-app-resource.stub' => base_path('stubs/mcp-app-resource.stub'),
+            __DIR__.'/../../stubs/mcp-app-resource.view.stub' => base_path('stubs/mcp-app-resource.view.stub'),
+        ], 'mcp-stubs');
+
+        $this->publishes([
+            __DIR__.'/../../config/mcp.php' => config_path('mcp.php'),
+        ], 'mcp-config');
     }
 
-    /**
-     * Load the AI routes file if it exists.
-     */
-    protected function loadAiRoutes(): void
+    protected function registerRoutes(): void
     {
         $path = base_path('routes/ai.php');
 
@@ -73,6 +76,45 @@ class McpServiceProvider extends ServiceProvider
             return;
         }
 
-        Route::prefix('mcp')->group($path);
+        Route::group([], $path);
+    }
+
+    protected function registerContainerCallbacks(): void
+    {
+        $this->app->resolving(Request::class, function (Request $request, $app): void {
+            if ($app->bound('mcp.request')) {
+                /** @var Request $currentRequest */
+                $currentRequest = $app->make('mcp.request');
+
+                $request->setArguments($currentRequest->all());
+                $request->setSessionId($currentRequest->sessionId());
+                $request->setMeta($currentRequest->meta());
+            }
+        });
+    }
+
+    protected function registerCommands(): void
+    {
+        $this->commands([
+            StartCommand::class,
+            MakeServerCommand::class,
+            MakeToolCommand::class,
+            MakePromptCommand::class,
+            MakeResourceCommand::class,
+            MakeAppResourceCommand::class,
+            InspectorCommand::class,
+        ]);
+    }
+
+    protected function registerViews(): void
+    {
+        $this->loadViewsFrom(__DIR__.'/../../resources/views/mcp', 'mcp');
+    }
+
+    protected function registerMcpScope(): void
+    {
+        $this->app->booted(function (): void {
+            Registrar::ensureMcpScope();
+        });
     }
 }

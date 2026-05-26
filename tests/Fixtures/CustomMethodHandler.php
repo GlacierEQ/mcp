@@ -1,18 +1,23 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Fixtures;
+declare(strict_types=1);
 
-use Laravel\Mcp\Server\Contracts\Methods\Method;
+namespace Tests\Fixtures;
+
+use Laravel\Mcp\Server\Contracts\Method;
 use Laravel\Mcp\Server\ServerContext;
-use Laravel\Mcp\Server\Transport\JsonRpcRequest;
-use Laravel\Mcp\Server\Transport\JsonRpcResponse;
+use Laravel\Mcp\Transport\JsonRpcRequest;
+use Laravel\Mcp\Transport\JsonRpcResponse;
 
 class CustomMethodHandler implements Method
 {
-    public function __construct(private string $customDependency) {}
+    public function __construct()
+    {
+        //
+    }
 
     public function handle(JsonRpcRequest $request, ServerContext $context): JsonRpcResponse
     {
-        return JsonRpcResponse::create($request->id, ['message' => 'Custom method executed successfully!']);
+        return JsonRpcResponse::result($request->id, ['message' => 'Custom method executed successfully!']);
     }
 }

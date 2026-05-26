@@ -4,279 +4,353 @@ declare(strict_types=1);
 
 namespace Laravel\Mcp;
 
-use Generator;
+use Illuminate\Container\Container;
 use Illuminate\Support\Str;
-use Laravel\Mcp\Server\Contracts\Transport\Transport;
-use Laravel\Mcp\Server\Exceptions\JsonRpcException;
+use Laravel\Mcp\Enums\ProtocolVersion;
+use Laravel\Mcp\Events\SessionInitialized;
+use Laravel\Mcp\Exceptions\JsonRpcException;
+use Laravel\Mcp\Schema\Icon;
+use Laravel\Mcp\Schema\Implementation;
+use Laravel\Mcp\Server\AppResource;
+use Laravel\Mcp\Server\Attributes\Instructions;
+use Laravel\Mcp\Server\Attributes\Name;
+use Laravel\Mcp\Server\Attributes\Version;
+use Laravel\Mcp\Server\Concerns\HasIcons;
+use Laravel\Mcp\Server\Contracts\Method;
+use Laravel\Mcp\Server\Contracts\Transport;
 use Laravel\Mcp\Server\Methods\CallTool;
+use Laravel\Mcp\Server\Methods\CompletionComplete;
 use Laravel\Mcp\Server\Methods\GetPrompt;
 use Laravel\Mcp\Server\Methods\Initialize;
 use Laravel\Mcp\Server\Methods\ListPrompts;
 use Laravel\Mcp\Server\Methods\ListResources;
+use Laravel\Mcp\Server\Methods\ListResourceTemplates;
 use Laravel\Mcp\Server\Methods\ListTools;
 use Laravel\Mcp\Server\Methods\Ping;
 use Laravel\Mcp\Server\Methods\ReadResource;
 use Laravel\Mcp\Server\Prompt;
 use Laravel\Mcp\Server\Resource;
 use Laravel\Mcp\Server\ServerContext;
+use Laravel\Mcp\Server\Testing\PendingTestResponse;
+use Laravel\Mcp\Server\Testing\TestResponse;
 use Laravel\Mcp\Server\Tool;
-use Laravel\Mcp\Server\Transport\JsonRpcProtocolError;
-use Laravel\Mcp\Server\Transport\JsonRpcRequest;
+use Laravel\Mcp\Transport\JsonRpcNotification;
+use Laravel\Mcp\Transport\JsonRpcRequest;
+use Laravel\Mcp\Transport\JsonRpcResponse;
+use stdClass;
 use Throwable;
 
+/**
+ * @mixin PendingTestResponse
+ */
 abstract class Server
 {
+    use HasIcons;
+
+    public const CAPABILITY_TOOLS = 'tools';
+
+    public const CAPABILITY_RESOURCES = 'resources';
+
+    public const CAPABILITY_PROMPTS = 'prompts';
+
+    public const CAPABILITY_COMPLETIONS = 'completions';
+
+    public const CAPABILITY_UI = 'io.modelcontextprotocol/ui';
+
+    protected string $name = 'Laravel MCP Server';
+
+    protected string $version = '0.0.1';
+
+    protected string $instructions = <<<'MARKDOWN'
+        This MCP server lets AI agents interact with our Laravel application.
+    MARKDOWN;
+
     /**
-     * The versions of the MCP specification supported by the server.
+     * @var array<int, string>
      */
-    public array $supportedProtocolVersion = [
-        '2025-06-18',
-        '2025-03-26',
-        '2024-11-05',
+    protected array $supportedProtocolVersion = [];
+
+    /**
+     * @var array<string, array<string, bool>|stdClass|string>
+     */
+    protected array $capabilities = [
+        self::CAPABILITY_TOOLS => [
+            'listChanged' => false,
+        ],
+        self::CAPABILITY_RESOURCES => [
+            'listChanged' => false,
+        ],
+        self::CAPABILITY_PROMPTS => [
+            'listChanged' => false,
+        ],
     ];
 
     /**
-     * The capabilities of the server.
+     * @var array<int, Tool|class-string<Tool>>
      */
-    public array $capabilities = [
-        'tools' => [
-            'listChanged' => false,
-        ],
-        'resources' => [
-            'listChanged' => false,
-        ],
-        'prompts' => [
-            'listChanged' => false,
-        ],
-    ];
+    protected array $tools = [];
 
     /**
-     * The name of the MCP server.
+     * @var array<int, Resource|class-string<Resource>>
      */
-    public string $serverName = 'Laravel MCP Server';
+    protected array $resources = [];
 
     /**
-     * The version of the MCP server.
+     * @var array<int, Prompt|class-string<Prompt>>
      */
-    public string $serverVersion = '0.0.1';
+    protected array $prompts = [];
 
-    /**
-     * The instructions for the AI.
-     */
-    public string $instructions = 'This MCP server lets AI agents interact with our Laravel application.';
-
-    /**
-     * @var array<string>
-     */
-    public array $tools = [];
-
-    /**
-     * @var array<string>
-     */
-    public array $resources = [];
-
-    /**
-     * @var array<string>
-     */
-    public array $prompts = [];
-
-    /**
-     * The maximum pagination length for tool/list calls.
-     */
     public int $maxPaginationLength = 50;
 
-    /**
-     * The default pagination length for tool/list calls.
-     */
     public int $defaultPaginationLength = 15;
 
     /**
-     * The transport used to communicate with the client.
-     */
-    protected Transport $transport;
-
-    /**
-     * All registered tools once the server is booted (both statically and dynamically added).
-     */
-    protected array $registeredTools = [];
-
-    protected array $registeredResources = [];
-
-    protected array $registeredPrompts = [];
-
-    /**
-     * The JSON-RPC methods available to the server.
+     * @var array<string, class-string<Method>>
      */
     protected array $methods = [
         'tools/list' => ListTools::class,
         'tools/call' => CallTool::class,
         'resources/list' => ListResources::class,
         'resources/read' => ReadResource::class,
+        'resources/templates/list' => ListResourceTemplates::class,
         'prompts/list' => ListPrompts::class,
         'prompts/get' => GetPrompt::class,
+        'completion/complete' => CompletionComplete::class,
         'ping' => Ping::class,
     ];
 
-    /**
-     * Create a new MCP server instance.
-     */
-    public function __construct()
-    {
-        $this->registeredTools = $this->tools;
-        $this->registeredResources = $this->resources;
-        $this->registeredPrompts = $this->prompts;
+    public function __construct(
+        protected Transport $transport,
+    ) {
+        //
     }
 
     /**
-     * Connect the server to the transport.
-     */
-    public function connect(Transport $transport)
-    {
-        $this->transport = $transport;
-
-        $this->boot();
-
-        $this->transport->onReceive(fn ($message) => $this->handle($message));
-    }
-
-    /**
-     * Process a message from the transport.
-     */
-    public function handle(string $rawMessage)
-    {
-        $sessionId = $this->transport->sessionId() ?? Str::uuid()->toString();
-
-        $context = new ServerContext(
-            supportedProtocolVersions: $this->supportedProtocolVersion,
-            serverCapabilities: $this->capabilities,
-            serverName: $this->serverName,
-            serverVersion: $this->serverVersion,
-            instructions: $this->instructions,
-            maxPaginationLength: $this->maxPaginationLength,
-            defaultPaginationLength: $this->defaultPaginationLength,
-            tools: $this->registeredTools,
-            resources: $this->registeredResources,
-            prompts: $this->registeredPrompts,
-        );
-
-        try {
-            $request = JsonRpcRequest::fromJson($rawMessage);
-
-            if ($request->method === 'initialize') {
-                return $this->handleInitializeMessage($sessionId, $request, $context);
-            }
-
-            if (! isset($request->id)) {
-                return; // JSON-RPC notification, no response needed
-            }
-
-            if (! isset($this->methods[$request->method])) {
-                throw new JsonRpcException("Method not found: {$request->method}", -32601, $request->id);
-            }
-
-            $this->handleMessage($sessionId, $request, $context);
-        } catch (JsonRpcException $e) {
-            $this->transport->send(json_encode($e->toJsonRpcError()));
-        } catch (Throwable $e) {
-            $jsonRpcError = (new JsonRpcProtocolError(
-                code: $e->getCode(),
-                message: $e->getMessage(),
-                requestId: $request->id ?? null,
-                data: null,
-            ))->toArray();
-            $this->transport->send(json_encode($jsonRpcError));
-        }
-    }
-
-    /**
-     * Boot the server.
-     */
-    public function boot()
-    {
-        // Override this method to dynamically add tools, custom methods, etc., when the server boots.
-    }
-
-    public function addTool(Tool|string $tool): self
-    {
-        if (! in_array($tool, $this->registeredTools, true)) {
-            $this->registeredTools[] = $tool;
-        }
-
-        return $this;
-    }
-
-    public function addResource(Resource|string $resource): self
-    {
-        if (! in_array($resource, $this->registeredResources, true)) {
-            $this->registeredResources[] = $resource;
-        }
-
-        return $this;
-    }
-
-    public function addPrompt(Prompt|string $prompt): self
-    {
-        if (! in_array($prompt, $this->registeredPrompts, true)) {
-            $this->registeredPrompts[] = $prompt;
-        }
-
-        return $this;
-    }
-
-    /**
-     * Add a JSON-RPC method dynamically to the server.
-     */
-    public function addMethod(string $name, string $handlerClass): self
-    {
-        $this->methods[$name] = $handlerClass;
-
-        return $this;
-    }
-
-    /**
-     * Add a capability dynamically to the server.
-     */
-    public function addCapability(string $key, mixed $value = null): self
-    {
-        $value = $value ?? (object) [];
-
-        data_set($this->capabilities, $key, $value);
-
-        return $this;
-    }
-
-    /**
-     * Handle a JSON-RPC message.
+     * Add or modify a server capability.
      *
-     * @throws \Laravel\Mcp\Server\Exceptions\JsonRpcException
+     * Using dot notation like "feature.enabled" will create a nested capability array.
+     * Passing a single key like "anotherFeature" will register an empty object capability.
      */
-    private function handleMessage(string $sessionId, JsonRpcRequest $request, ServerContext $context): void
+    public function addCapability(string $key, bool $value = true): void
     {
-        /** @var \Laravel\Mcp\Server\Contracts\Methods\Method $methodClass */
-        $methodClass = app($this->methods[$request->method]);
+        if (str_contains($key, '.')) {
+            [$root, $child] = explode('.', $key, 2);
+            $existing = $this->capabilities[$root] ?? [];
 
-        $response = $methodClass->handle($request, $context);
+            if (! is_array($existing)) {
+                $existing = [];
+            }
 
-        if ($response instanceof Generator) {
-            $this->transport->stream(function () use ($response) {
-                foreach ($response as $message) {
-                    $this->transport->send($message->toJson());
-                }
-            });
+            $existing[$child] = $value;
+            $this->capabilities[$root] = $existing;
 
             return;
         }
 
-        $this->transport->send($response->toJson());
+        // Represent empty capability as an object when JSON encoded
+        $this->capabilities[$key] = (object) [];
     }
 
     /**
-     * Handle the JSON-RPC initialize message.
+     * Register a custom JSON-RPC method handler.
+     *
+     * @param  class-string<Method>  $handler
      */
-    private function handleInitializeMessage(string $sessionId, JsonRpcRequest $request, ServerContext $context)
+    public function addMethod(string $method, string $handler): void
+    {
+        $this->methods[$method] = $handler;
+    }
+
+    public function start(): void
+    {
+        $this->boot();
+        $this->detectUiCapability();
+
+        $this->transport->onReceive($this->handle(...));
+    }
+
+    protected function boot(): void
+    {
+        //
+    }
+
+    public function handle(string $rawMessage): void
+    {
+        $context = $this->createContext();
+
+        try {
+            $jsonRequest = json_decode($rawMessage, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new JsonRpcException('Parse error: Invalid JSON was received by the server.', -32700);
+            }
+
+            $request = isset($jsonRequest['id'])
+                ? JsonRpcRequest::from($jsonRequest, $this->transport->sessionId())
+                : JsonRpcNotification::from($jsonRequest);
+
+            if ($request instanceof JsonRpcNotification) {
+                return;
+            }
+
+            if ($request->method === 'initialize') {
+                $this->handleInitializeMessage($request, $context);
+
+                return;
+            }
+
+            if (! isset($this->methods[$request->method])) {
+                throw new JsonRpcException(
+                    "The method [{$request->method}] was not found.",
+                    -32601,
+                    $request->id,
+                );
+            }
+
+            $this->handleMessage($request, $context);
+        } catch (JsonRpcException $e) {
+            $this->transport->send($e->toJsonRpcResponse()->toJson());
+        } catch (Throwable $e) {
+            report($e);
+
+            $config = Container::getInstance()->make('config');
+
+            if ($config->get('app.debug', false)) {
+                throw $e;
+            }
+
+            $jsonRpcResponse = JsonRpcResponse::error(
+                $request->id ?? null,
+                -32603,
+                'Something went wrong while processing the request.',
+            );
+
+            $this->transport->send($jsonRpcResponse->toJson());
+        }
+    }
+
+    public function createContext(): ServerContext
+    {
+        $name = $this->resolveAttribute(Name::class);
+        $version = $this->resolveAttribute(Version::class);
+        $instructions = $this->resolveAttribute(Instructions::class);
+
+        return new ServerContext(
+            supportedProtocolVersions: $this->supportedProtocolVersion ?: ProtocolVersion::supported(),
+            serverCapabilities: $this->capabilities,
+            implementation: new Implementation(
+                name: $name !== null ? $name->value : $this->name,
+                version: $version !== null ? $version->value : $this->version,
+                icons: $this->resolvedIcons(),
+            ),
+            instructions: $instructions !== null ? $instructions->value : $this->instructions,
+            maxPaginationLength: $this->maxPaginationLength,
+            defaultPaginationLength: $this->defaultPaginationLength,
+            tools: $this->tools,
+            resources: $this->resources,
+            prompts: $this->prompts,
+        );
+    }
+
+    /**
+     * @return list<Icon>
+     */
+    protected function icons(): array
+    {
+        return [];
+    }
+
+    /**
+     * @throws JsonRpcException
+     */
+    protected function handleMessage(JsonRpcRequest $request, ServerContext $context): void
+    {
+        $response = $this->runMethodHandle($request, $context);
+
+        if (! is_iterable($response)) {
+            $this->transport->send($response->toJson());
+
+            return;
+        }
+
+        $this->transport->stream(function () use ($response): void {
+            foreach ($response as $message) {
+                $this->transport->send($message->toJson());
+            }
+        });
+    }
+
+    /**
+     * @return iterable<JsonRpcResponse>|JsonRpcResponse
+     *
+     * @throws JsonRpcException
+     */
+    protected function runMethodHandle(JsonRpcRequest $request, ServerContext $context): iterable|JsonRpcResponse
+    {
+        $container = Container::getInstance();
+
+        /** @var Method $methodClass */
+        $methodClass = $container->make(
+            $this->methods[$request->method],
+        );
+
+        $container->instance('mcp.request', $request->toRequest());
+
+        try {
+            $response = $methodClass->handle($request, $context);
+        } finally {
+            $container->forgetInstance('mcp.request');
+        }
+
+        return $response;
+    }
+
+    protected function handleInitializeMessage(JsonRpcRequest $request, ServerContext $context): void
     {
         $response = (new Initialize)->handle($request, $context);
 
-        $this->transport->send($response->toJson());
+        $sessionId = $this->generateSessionId();
+
+        Container::getInstance()->make('events')->dispatch(new SessionInitialized(
+            sessionId: $sessionId,
+            clientInfo: $request->params['clientInfo'] ?? null,
+            protocolVersion: $request->params['protocolVersion'] ?? null,
+            clientCapabilities: $request->params['capabilities'] ?? null,
+        ));
+
+        $this->transport->send($response->toJson(), $sessionId);
+    }
+
+    protected function generateSessionId(): string
+    {
+        return Str::uuid()->toString();
+    }
+
+    protected function detectUiCapability(): void
+    {
+        if (array_key_exists(self::CAPABILITY_UI, $this->capabilities)) {
+            return;
+        }
+
+        foreach ($this->resources as $resource) {
+            if (is_subclass_of($resource, AppResource::class)) {
+                $this->addCapability(self::CAPABILITY_UI);
+
+                return;
+            }
+        }
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $arguments
+     */
+    public static function __callStatic(string $name, array $arguments): PendingTestResponse|TestResponse
+    {
+        $pendingTestResponse = new PendingTestResponse(
+            Container::getInstance(),
+            static::class,
+        );
+
+        return $pendingTestResponse->$name(...$arguments);
     }
 }

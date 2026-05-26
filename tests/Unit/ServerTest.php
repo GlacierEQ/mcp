@@ -1,412 +1,378 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Unit;
+use Laravel\Mcp\Enums\IconTheme;
+use Laravel\Mcp\Schema\Icon;
+use Laravel\Mcp\Server;
+use Laravel\Mcp\Server\Attributes\Icon as IconAttribute;
+use Laravel\Mcp\Server\Contracts\Method;
+use Laravel\Mcp\Server\ServerContext;
+use Laravel\Mcp\Transport\JsonRpcRequest;
+use Laravel\Mcp\Transport\JsonRpcResponse;
+use Tests\Fixtures\ArrayTransport;
+use Tests\Fixtures\CustomMethodHandler;
+use Tests\Fixtures\ExampleServer;
+use Tests\Fixtures\ThrowingMethodHandler;
 
-use Laravel\Mcp\Tests\Fixtures\ArrayTransport;
-use Laravel\Mcp\Tests\Fixtures\CustomMethodHandler;
-use Laravel\Mcp\Tests\Fixtures\ExampleServer;
-use Laravel\Mcp\Tests\TestCase;
-use PHPUnit\Framework\Attributes\Test;
+it('can handle an initialize message', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
 
-class ServerTest extends TestCase
-{
-    #[Test]
-    public function it_can_handle_an_initialize_message()
+    $server->start();
+
+    $payload = json_encode(initializeMessage());
+
+    ($transport->handler)($payload);
+
+    $response = json_decode((string) $transport->sent[0], true);
+
+    expect($response)->toEqual(expectedInitializeResponse());
+});
+
+it('can add a capability', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->addCapability('customFeature.enabled', true);
+    $server->addCapability('anotherFeature');
+
+    $server->start();
+
+    $payload = json_encode(initializeMessage());
+
+    ($transport->handler)($payload);
+
+    $jsonResponse = $transport->sent[0];
+
+    $capabilities = (fn (): array => $this->capabilities)->call($server);
+
+    $expectedCapabilitiesJson = json_encode(array_merge($capabilities, [
+        'customFeature' => [
+            'enabled' => true,
+        ],
+        'anotherFeature' => (object) [],
+    ]));
+
+    $this->assertStringContainsString($expectedCapabilitiesJson, $jsonResponse);
+});
+
+it('can handle a list tools message', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->start();
+
+    $payload = json_encode(listToolsMessage());
+
+    ($transport->handler)($payload);
+
+    $response = json_decode((string) $transport->sent[0], true);
+
+    expect($response)->toEqual(expectedListToolsResponse());
+});
+
+it('can handle a call tool message', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->start();
+
+    $payload = json_encode(callToolMessage());
+
+    ($transport->handler)($payload);
+
+    $response = json_decode((string) $transport->sent[0], true);
+
+    expect($response)->toEqual(expectedCallToolResponse());
+});
+
+it('can handle a notification message', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->start();
+
+    $payload = json_encode([
+        'jsonrpc' => '2.0',
+        'method' => 'notifications/initialized',
+    ]);
+
+    ($transport->handler)($payload);
+
+    expect($transport->sent)->toHaveCount(0);
+});
+
+it('can handle an unknown method', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->start();
+
+    $payload = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 789,
+        'method' => 'unknown/method',
+        'params' => [],
+    ]);
+
+    ($transport->handler)($payload);
+
+    $response = json_decode((string) $transport->sent[0], true);
+
+    expect($response)->toEqual([
+        'jsonrpc' => '2.0',
+        'id' => 789,
+        'error' => [
+            'code' => -32601,
+            'message' => 'The method [unknown/method] was not found.',
+        ],
+    ]);
+});
+
+it('handles json decode errors', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->start();
+
+    $invalidJsonPayload = '{"jsonrpc": "2.0", "id": 123, "method": "initialize", "params": {}';
+
+    // Malformed JSON
+    ($transport->handler)($invalidJsonPayload);
+
+    expect($transport->sent)->toHaveCount(1);
+    $response = json_decode((string) $transport->sent[0], true);
+
+    expect($response)->toBe([
+        'jsonrpc' => '2.0',
+        'error' => [
+            'code' => -32700,
+            'message' => 'Parse error: Invalid JSON was received by the server.',
+        ],
+    ]);
+});
+
+it('can handle a custom method message', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->addMethod('custom/method', CustomMethodHandler::class);
+
+    $this->app->bind(CustomMethodHandler::class, fn (): CustomMethodHandler => new CustomMethodHandler('custom-dependency'));
+
+    $server->start();
+
+    $payload = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 12345,
+        'method' => 'custom/method',
+        'params' => [],
+    ]);
+
+    ($transport->handler)($payload);
+
+    expect($transport->sent)->toHaveCount(1);
+    $response = json_decode((string) $transport->sent[0], true);
+
+    expect($response)->toEqual([
+        'jsonrpc' => '2.0',
+        'id' => 12345,
+        'result' => [
+            'message' => 'Custom method executed successfully!',
+        ],
+    ]);
+});
+
+it('can handle a ping message', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->start();
+
+    $payload = json_encode(pingMessage());
+
+    ($transport->handler)($payload);
+
+    $response = json_decode((string) $transport->sent[0], true);
+
+    expect($response)->toEqual(expectedPingResponse());
+});
+
+it('calls boot method on connect', function (): void {
+    $transport = new ArrayTransport;
+
+    $server = new class($transport) extends Server
     {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->connect($transport);
-
-        $payload = json_encode($this->initializeMessage());
-
-        ($transport->handler)($payload);
-
-        $response = json_decode($transport->sent[0], true);
-
-        $this->assertEquals($this->expectedInitializeResponse(), $response);
-    }
-
-    #[Test]
-    public function it_can_add_a_capability()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->addCapability('customFeature.enabled', true);
-        $server->addCapability('anotherFeature');
-
-        $server->connect($transport);
-
-        $payload = json_encode($this->initializeMessage());
-
-        ($transport->handler)($payload);
-
-        $jsonResponse = $transport->sent[0];
-
-        $expectedCapabilitiesJson = json_encode(array_merge((new ExampleServer)->capabilities, [
-            'customFeature' => [
-                'enabled' => true,
-            ],
-            'anotherFeature' => (object) [],
-        ]));
-
-        $this->assertStringContainsString($expectedCapabilitiesJson, $jsonResponse);
-    }
-
-    #[Test]
-    public function it_can_handle_a_list_tools_message()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->connect($transport);
-
-        $payload = json_encode($this->listToolsMessage());
-
-        ($transport->handler)($payload);
-
-        $response = json_decode($transport->sent[0], true);
-
-        $this->assertEquals($this->expectedListToolsResponse(), $response);
-    }
-
-    #[Test]
-    public function it_can_handle_a_call_tool_message()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->connect($transport);
-
-        $payload = json_encode($this->callToolMessage());
-
-        ($transport->handler)($payload);
-
-        $response = json_decode($transport->sent[0], true);
-
-        $this->assertEquals($this->expectedCallToolResponse(), $response);
-    }
-
-    #[Test]
-    public function it_can_handle_a_notification_message()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->connect($transport);
-
-        $payload = json_encode([
-            'jsonrpc' => '2.0',
-            'method' => 'notifications/initialized',
-        ]);
-
-        ($transport->handler)($payload);
-
-        $this->assertCount(0, $transport->sent);
-    }
-
-    #[Test]
-    public function it_can_handle_an_unknown_method()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->connect($transport);
-
-        $payload = json_encode([
-            'jsonrpc' => '2.0',
-            'id' => 789,
-            'method' => 'unknown/method',
-            'params' => [],
-        ]);
-
-        ($transport->handler)($payload);
-
-        $response = json_decode($transport->sent[0], true);
-
-        $this->assertEquals([
-            'jsonrpc' => '2.0',
-            'id' => 789,
-            'error' => [
-                'code' => -32601,
-                'message' => 'Method not found: unknown/method',
-            ],
-        ], $response);
-    }
-
-    #[Test]
-    public function it_handles_json_decode_errors()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->connect($transport);
-
-        $invalidJsonPayload = '{"jsonrpc": "2.0", "id": 123, "method": "initialize", "params": {}'; // Malformed JSON
-
-        ($transport->handler)($invalidJsonPayload);
-
-        $this->assertCount(1, $transport->sent);
-        $response = json_decode($transport->sent[0], true);
-
-        $this->assertEquals('2.0', $response['jsonrpc']);
-        $this->assertNull($response['id']);
-        $this->assertEquals(-32700, $response['error']['code']);
-        $this->assertEquals('Parse error', $response['error']['message']);
-    }
-
-    #[Test]
-    public function it_can_handle_a_custom_method_message()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->addMethod('custom/method', CustomMethodHandler::class);
-
-        $this->app->bind(CustomMethodHandler::class, fn () => new CustomMethodHandler('custom-dependency'));
-
-        $server->connect($transport);
-
-        $payload = json_encode([
-            'jsonrpc' => '2.0',
-            'id' => 12345,
-            'method' => 'custom/method',
-            'params' => [],
-        ]);
-
-        ($transport->handler)($payload);
-
-        $this->assertCount(1, $transport->sent);
-        $response = json_decode($transport->sent[0], true);
-
-        $this->assertEquals([
-            'jsonrpc' => '2.0',
-            'id' => 12345,
-            'result' => [
-                'message' => 'Custom method executed successfully!',
-            ],
-        ], $response);
-    }
-
-    #[Test]
-    public function it_can_handle_a_ping_message()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->connect($transport);
-
-        $payload = json_encode($this->pingMessage());
-
-        ($transport->handler)($payload);
-
-        $response = json_decode($transport->sent[0], true);
-
-        $this->assertEquals($this->expectedPingResponse(), $response);
-    }
-
-    #[Test]
-    public function it_calls_boot_method_on_connect()
-    {
-        $transport = new ArrayTransport;
-
-        $server = new class extends \Laravel\Mcp\Server
+        public function boot(): void
         {
-            public bool $bootCalled = false;
-
-            public function boot()
-            {
-                $this->bootCalled = true;
-            }
-        };
-
-        $server->connect($transport);
-
-        $this->assertTrue($server->bootCalled, 'The boot() method was not called on connect.');
-    }
-
-    #[Test]
-    public function it_can_handle_a_tool_streaming_multiple_messages()
-    {
-        $transport = new ArrayTransport;
-        $server = new ExampleServer;
-
-        $server->connect($transport);
-
-        $payload = json_encode($this->callStreamingToolMessage());
-
-        ($transport->handler)($payload);
-
-        $messages = array_map(fn ($msg) => json_decode($msg, true), $transport->sent);
-
-        $this->assertEquals($this->expectedStreamingToolResponse(), $messages);
-    }
-
-    private function initializeMessage(): array
-    {
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 456,
-            'method' => 'initialize',
-            'params' => [],
-        ];
-    }
-
-    private function expectedInitializeResponse(): array
-    {
-        $server = new ExampleServer;
-
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 456,
-            'result' => [
-                'protocolVersion' => '2025-06-18',
-                'capabilities' => $server->capabilities,
-                'serverInfo' => [
-                    'name' => $server->serverName,
-                    'version' => $server->serverVersion,
-                ],
-                'instructions' => $server->instructions,
-            ],
-        ];
-    }
-
-    private function listToolsMessage(): array
-    {
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'tools/list',
-        ];
-    }
-
-    private function expectedListToolsResponse(): array
-    {
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'result' => [
-                'tools' => [
-                    [
-                        'name' => 'example-tool',
-                        'description' => 'This tool says hello to a person',
-                        'inputSchema' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'name' => [
-                                    'type' => 'string',
-                                    'description' => 'The name of the person to greet',
-                                ],
-                            ],
-                            'required' => ['name'],
-                        ],
-                        'annotations' => [],
-                    ],
-                    [
-                        'name' => 'streaming-tool',
-                        'description' => 'A tool that streams multiple responses.',
-                        'inputSchema' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'count' => [
-                                    'type' => 'integer',
-                                    'description' => 'Number of messages to stream.',
-                                ],
-                            ],
-                            'required' => ['count'],
-                        ],
-                        'annotations' => [],
-                    ],
-                ],
-            ],
-        ];
-    }
-
-    private function callToolMessage(): array
-    {
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'tools/call',
-            'params' => [
-                'name' => 'example-tool',
-                'arguments' => [
-                    'name' => 'John Doe',
-                ],
-            ],
-        ];
-    }
-
-    private function expectedCallToolResponse(): array
-    {
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'result' => [
-                'content' => [[
-                    'type' => 'text',
-                    'text' => 'Hello, John Doe!',
-                ]],
-                'isError' => false,
-            ],
-        ];
-    }
-
-    private function pingMessage(): array
-    {
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 789,
-            'method' => 'ping',
-        ];
-    }
-
-    private function expectedPingResponse(): array
-    {
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 789,
-            'result' => [],
-        ];
-    }
-
-    private function callStreamingToolMessage(int $count = 2): array
-    {
-        return [
-            'jsonrpc' => '2.0',
-            'id' => 2, // Assuming a different ID for this new message type for clarity
-            'method' => 'tools/call',
-            'params' => [
-                'name' => 'streaming-tool',
-                'arguments' => [
-                    'count' => $count,
-                ],
-            ],
-        ];
-    }
-
-    private function expectedStreamingToolResponse(int $count = 2): array
-    {
-        $messages = [];
-
-        for ($i = 1; $i <= $count; $i++) {
-            $messages[] = [
-                'jsonrpc' => '2.0',
-                'method' => 'stream/progress',
-                'params' => ['progress' => $i / $count * 100, 'message' => "Processing item {$i} of {$count}"],
-            ];
+            $this->bootCalled = true;
         }
+    };
+    $server->start();
 
-        $messages[] = [
-            'jsonrpc' => '2.0',
-            'id' => 2, // Must match the ID in callStreamingToolMessage
-            'result' => [
-                'content' => [['type' => 'text', 'text' => "Finished streaming {$count} messages."]],
-                'isError' => false,
-            ],
+    expect($server->bootCalled)->toBeTrue('The boot() method was not called on connect.');
+});
+
+it('can handle a tool streaming multiple messages', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    $server->start();
+
+    $payload = json_encode(callStreamingToolMessage());
+
+    ($transport->handler)($payload);
+
+    $messages = array_map(fn ($msg): mixed => json_decode((string) $msg, true), $transport->sent);
+
+    expect($messages)->toEqual(expectedStreamingToolResponse());
+});
+
+it('handles capability with non-array existing value', function (): void {
+    $transport = new ArrayTransport;
+    $server = new ExampleServer($transport);
+
+    // First set a non-array value
+    $server->addCapability('feature');
+
+    // Then try to add a nested capability to it
+    $server->addCapability('feature.enabled', true);
+
+    $server->start();
+
+    $payload = json_encode(initializeMessage());
+
+    ($transport->handler)($payload);
+
+    $capabilities = (fn (): array => $this->capabilities)->call($server);
+
+    expect($capabilities['feature'])->toBeArray();
+    expect($capabilities['feature']['enabled'])->toBeTrue();
+});
+
+it('handles exceptions in debug mode', function (): void {
+    config()->set('app.debug', true);
+
+    $transport = new ArrayTransport;
+    $server = new class($transport) extends Server
+    {
+        protected array $methods = [
+            'test/method' => ThrowingMethodHandler::class,
         ];
+    };
 
-        return $messages;
+    $this->app->bind(ThrowingMethodHandler::class, fn (): Method => new class implements Method
+    {
+        public function handle(JsonRpcRequest $request, ServerContext $context): JsonRpcResponse
+        {
+            throw new Exception('Test exception');
+        }
+    });
+
+    $server->start();
+
+    $payload = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 999,
+        'method' => 'test/method',
+        'params' => [],
+    ]);
+
+    expect(function () use ($transport, $payload): void {
+        ($transport->handler)($payload);
+    })->toThrow(Exception::class, 'Test exception');
+});
+
+it('handles exceptions in production mode', function (): void {
+    config()->set('app.debug', false);
+
+    $transport = new ArrayTransport;
+    $server = new class($transport) extends Server
+    {
+        protected array $methods = [
+            'test/method' => ThrowingMethodHandler::class,
+        ];
+    };
+
+    $this->app->bind(ThrowingMethodHandler::class, fn (): Method => new class implements Method
+    {
+        public function handle(JsonRpcRequest $request, ServerContext $context): JsonRpcResponse
+        {
+            throw new Exception('Test exception');
+        }
+    });
+
+    $server->start();
+
+    $payload = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 999,
+        'method' => 'test/method',
+        'params' => [],
+    ]);
+
+    ($transport->handler)($payload);
+
+    expect($transport->sent)->toHaveCount(1);
+    $response = json_decode((string) $transport->sent[0], true);
+
+    expect($response)->toEqual([
+        'jsonrpc' => '2.0',
+        'id' => 999,
+        'error' => [
+            'code' => -32603,
+            'message' => 'Something went wrong while processing the request.',
+        ],
+    ]);
+});
+
+it('forwards icons() into the server context', function (): void {
+    $server = new class(new ArrayTransport) extends Server
+    {
+        protected function icons(): array
+        {
+            return [new Icon('https://example.com/server.png', mimeType: 'image/png')];
+        }
+    };
+
+    $context = $server->createContext();
+
+    expect($context->implementation->icons)->toHaveCount(1)
+        ->and($context->implementation->icons[0])->toBeInstanceOf(Icon::class)
+        ->and($context->implementation->icons[0]->src)->toBe('https://example.com/server.png');
+});
+
+it('reads class-level Icon attributes into the server context', function (): void {
+    $server = new IconAttributeServer(new ArrayTransport);
+
+    $context = $server->createContext();
+
+    expect($context->implementation->icons)->toHaveCount(2)
+        ->and($context->implementation->icons[0]->src)->toBe('https://example.com/icon.png')
+        ->and($context->implementation->icons[0]->mimeType)->toBe('image/png')
+        ->and($context->implementation->icons[0]->sizes)->toBe(['48x48'])
+        ->and($context->implementation->icons[1]->src)->toBe('https://example.com/icon-dark.svg')
+        ->and($context->implementation->icons[1]->theme)->toBe(IconTheme::Dark);
+});
+
+it('merges Icon attributes with icons() method output', function (): void {
+    $server = new MixedIconServer(new ArrayTransport);
+
+    $context = $server->createContext();
+
+    expect($context->implementation->icons)->toHaveCount(2)
+        ->and($context->implementation->icons[0]->src)->toBe('https://example.com/from-attribute.png')
+        ->and($context->implementation->icons[1]->src)->toBe('https://example.com/from-method.png');
+});
+
+#[IconAttribute('https://example.com/icon.png', mimeType: 'image/png', sizes: ['48x48'])]
+#[IconAttribute('https://example.com/icon-dark.svg', theme: IconTheme::Dark)]
+class IconAttributeServer extends Server {}
+
+#[IconAttribute('https://example.com/from-attribute.png')]
+class MixedIconServer extends Server
+{
+    protected function icons(): array
+    {
+        return [new Icon('https://example.com/from-method.png')];
     }
 }

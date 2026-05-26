@@ -4,17 +4,14 @@ declare(strict_types=1);
 
 namespace Laravel\Mcp\Server\Methods;
 
-use Laravel\Mcp\Server\Contracts\Methods\Method;
-use Laravel\Mcp\Server\Exceptions\JsonRpcException;
+use Laravel\Mcp\Exceptions\JsonRpcException;
+use Laravel\Mcp\Server\Contracts\Method;
 use Laravel\Mcp\Server\ServerContext;
-use Laravel\Mcp\Server\Transport\JsonRpcRequest;
-use Laravel\Mcp\Server\Transport\JsonRpcResponse;
+use Laravel\Mcp\Transport\JsonRpcRequest;
+use Laravel\Mcp\Transport\JsonRpcResponse;
 
 class Initialize implements Method
 {
-    /**
-     * Handle the JSON-RPC initialize request.
-     */
     public function handle(JsonRpcRequest $request, ServerContext $context): JsonRpcResponse
     {
         $requestedVersion = $request->params['protocolVersion'] ?? null;
@@ -31,15 +28,12 @@ class Initialize implements Method
             );
         }
 
-        $protocol = $requestedVersion ?? $context->supportedProtocolVersions[0];
+        $protocolVersion = $requestedVersion ?? $context->supportedProtocolVersions[0];
 
-        return JsonRpcResponse::create($request->id, [
-            'protocolVersion' => $protocol,
+        return JsonRpcResponse::result($request->id, [
+            'protocolVersion' => $protocolVersion,
             'capabilities' => $context->serverCapabilities,
-            'serverInfo' => [
-                'name' => $context->serverName,
-                'version' => $context->serverVersion,
-            ],
+            'serverInfo' => $context->implementation->toArray(),
             'instructions' => $context->instructions,
         ]);
     }

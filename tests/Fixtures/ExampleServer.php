@@ -1,13 +1,15 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Fixtures;
+declare(strict_types=1);
+
+namespace Tests\Fixtures;
 
 use Laravel\Mcp\Server;
 
 class ExampleServer extends Server
 {
     public array $tools = [
-        ExampleTool::class,
+        SayHiTool::class,
         StreamingTool::class,
     ];
 
@@ -16,4 +18,9 @@ class ExampleServer extends Server
         DailyPlanResource::class,
         RecentMeetingRecordingResource::class,
     ];
+
+    protected function generateSessionId(): string
+    {
+        return 'overridden-'.uniqid();
+    }
 }

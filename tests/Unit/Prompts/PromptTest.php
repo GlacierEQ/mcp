@@ -1,87 +1,132 @@
 <?php
 
-namespace Laravel\Mcp\Tests\Unit\Prompts;
-
+use Laravel\Mcp\Response;
+use Laravel\Mcp\Schema\Icon;
 use Laravel\Mcp\Server\Prompt;
-use Laravel\Mcp\Server\Prompts\Arguments;
-use Laravel\Mcp\Server\Prompts\PromptResult;
-use Laravel\Mcp\Tests\Fixtures\ReviewMyCodePrompt;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
+use Laravel\Mcp\Server\Prompts\Argument;
 
-// A concrete implementation of the abstract Prompt class for test purposes.
-class DummyPrompt extends Prompt
-{
-    protected string $description = 'A test prompt';
-
-    public function handle(array $arguments): PromptResult
+it('returns no meta by default', function (): void {
+    $prompt = new class extends Prompt
     {
-        return new PromptResult('Test content', 'Test description');
-    }
-}
+        public function description(): string
+        {
+            return 'Test prompt';
+        }
 
-class PromptTest extends TestCase
-{
-    private function makePrompt(): Prompt
+        public function handle(): Response
+        {
+            return Response::text('Hello');
+        }
+    };
+
+    expect($prompt->meta())->toBeNull()
+        ->and($prompt->toArray())->not->toHaveKey('_meta');
+});
+
+it('can have custom meta', function (): void {
+    $prompt = new class extends Prompt
     {
-        return new DummyPrompt;
-    }
+        protected ?array $meta = [
+            'category' => 'greeting',
+            'tags' => ['hello', 'welcome'],
+        ];
 
-    #[Test]
-    public function it_has_expected_default_values(): void
+        public function description(): string
+        {
+            return 'Test prompt';
+        }
+
+        public function handle(): Response
+        {
+            return Response::text('Hello');
+        }
+    };
+
+    expect($prompt->toArray())
+        ->toHaveKey('_meta')
+        ->_meta->toEqual([
+            'category' => 'greeting',
+            'tags' => ['hello', 'welcome'],
+        ]);
+});
+
+it('includes icons in toArray when declared on a prompt', function (): void {
+    $prompt = new class extends Prompt
     {
-        $prompt = $this->makePrompt();
+        public function description(): string
+        {
+            return 'Test prompt';
+        }
 
-        $this->assertSame('dummy-prompt', $prompt->name());
-        $this->assertSame('Dummy Prompt', $prompt->title());
-        $this->assertSame('A test prompt', $prompt->description());
-    }
+        public function handle(): Response
+        {
+            return Response::text('Hello');
+        }
 
-    #[Test]
-    public function it_returns_arguments(): void
+        public function icons(): array
+        {
+            return [new Icon('https://example.com/prompt.png', mimeType: 'image/png')];
+        }
+    };
+
+    expect($prompt->toArray()['icons'])->toBe([
+        ['src' => 'https://example.com/prompt.png', 'mimeType' => 'image/png'],
+    ]);
+});
+
+it('omits icons in toArray when none are declared on a prompt', function (): void {
+    $prompt = new class extends Prompt
     {
-        $prompt = $this->makePrompt();
-        $arguments = $prompt->arguments();
+        public function description(): string
+        {
+            return 'Test prompt';
+        }
 
-        $this->assertInstanceOf(Arguments::class, $arguments);
-    }
+        public function handle(): Response
+        {
+            return Response::text('Hello');
+        }
+    };
 
-    #[Test]
-    public function it_can_be_converted_to_array(): void
+    expect($prompt->toArray())->not->toHaveKey('icons');
+});
+
+it('includes meta in array representation with other fields', function (): void {
+    $prompt = new class extends Prompt
     {
-        $prompt = $this->makePrompt();
-        $array = $prompt->toArray();
+        protected string $name = 'greet';
 
-        $this->assertArrayHasKey('name', $array);
-        $this->assertArrayHasKey('title', $array);
-        $this->assertArrayHasKey('description', $array);
-        $this->assertArrayHasKey('arguments', $array);
+        protected string $title = 'Greeting Prompt';
 
-        $this->assertSame('dummy-prompt', $array['name']);
-        $this->assertSame('Dummy Prompt', $array['title']);
-        $this->assertSame('A test prompt', $array['description']);
-        $this->assertIsArray($array['arguments']);
-    }
+        protected string $description = 'A friendly greeting';
 
-    #[Test]
-    public function it_can_handle_arguments(): void
-    {
-        $prompt = $this->makePrompt();
-        $result = $prompt->handle(['test' => 'value']);
+        protected ?array $meta = [
+            'version' => '1.0',
+        ];
 
-        $this->assertEquals($result->toArray()['description'], 'Test description');
-    }
+        public function handle(): Response
+        {
+            return Response::text('Hello');
+        }
 
-    #[Test]
-    public function it_works_with_fixture_prompt(): void
-    {
-        $prompt = new ReviewMyCodePrompt;
+        public function arguments(): array
+        {
+            return [
+                new Argument('name', 'User name', true),
+            ];
+        }
+    };
 
-        $this->assertSame('review-my-code-prompt', $prompt->name());
-        $this->assertSame('Review My Code Prompt', $prompt->title());
+    $array = $prompt->toArray();
 
-        $result = $prompt->handle([]);
-        $this->assertEquals($result->toArray()['description'], 'Instructions for how to review my code');
-        $this->assertCount(1, $result->toArray()['messages']);
-    }
-}
+    expect($array)
+        ->toHaveKey('name', 'greet')
+        ->toHaveKey('title', 'Greeting Prompt')
+        ->toHaveKey('description', 'A friendly greeting')
+        ->toHaveKey('arguments')
+        ->toHaveKey('_meta')
+        ->and($array)
+        ->_meta->toEqual(['version' => '1.0'])
+        ->arguments->toHaveCount(1);
+
+});
